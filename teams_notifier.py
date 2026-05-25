@@ -96,13 +96,16 @@ def send_to_teams(message: str) -> bool:
             # Primary: stable data-tid attribute (language-independent)
             try:
                 btn = page.locator("[data-tid='compose-start-post']")
-                if btn.is_visible(timeout=4000):
-                    btn.click()
-                    page.wait_for_timeout(3000)
+                count = btn.count()
+                log.info(f"      Found {count} [data-tid='compose-start-post'] element(s)")
+                visible_btn = btn.first
+                if visible_btn.is_visible(timeout=4000):
+                    visible_btn.scroll_into_view_if_needed()
+                    visible_btn.click()
                     dialog_opened = True
-                    log.info("      Opened dialog via [data-tid='compose-start-post']")
-            except Exception:
-                pass
+                    log.info("      Clicked [data-tid='compose-start-post']")
+            except Exception as e:
+                log.debug(f"      compose-start-post click failed: {e}")
 
             # Fallback: button text (varies by Teams UI language)
             if not dialog_opened:
@@ -124,8 +127,15 @@ def send_to_teams(message: str) -> bool:
                 page.mouse.click(vp["width"] // 2, vp["height"] - 80)
                 page.wait_for_timeout(1500)
 
-            # Extra wait for the dialog's rich-text editor to fully render
-            page.wait_for_timeout(3000)
+            # Wait for CKEditor to actually appear in the DOM (up to 15s)
+            # CKEditor initializes asynchronously after the compose panel opens
+            log.info("      Waiting for compose editor to initialize...")
+            try:
+                page.wait_for_selector("[data-tid='ckeditor']", state="visible", timeout=15000)
+                log.info("      Compose editor ready.")
+            except Exception:
+                log.warning("      [data-tid='ckeditor'] not visible after 15s, will try fallback selectors...")
+                page.wait_for_timeout(2000)
 
             # ── 6. Find the message compose box ──────────────────────────
             log.info("      Looking for message compose box...")
