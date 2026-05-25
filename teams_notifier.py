@@ -71,7 +71,7 @@ def send_to_teams(message: str) -> bool:
             page.get_by_text(CHANNEL_NAME, exact=True).first.click()
             page.wait_for_timeout(1500)
 
-            # ── 4. Click "Post in channel" if compose box not yet visible ──
+            # ── 4. Activate compose area ──────────────────────────────────
             dialog_mode = False
             try:
                 post_btn = page.get_by_text("Post in channel", exact=True)
@@ -82,14 +82,19 @@ def send_to_teams(message: str) -> bool:
                     dialog_mode = True
                     log.info("      Dialog mode — will use Post button to send")
             except Exception:
-                log.info("      Channel has posts — will use compose bar + Enter to send")
+                # Channel has posts — click bottom of viewport to activate compose bar
+                log.info("      Channel has posts — activating compose bar...")
+                vp = page.viewport_size or {"width": 1280, "height": 720}
+                page.mouse.click(vp["width"] // 2, vp["height"] - 80)
+                page.wait_for_timeout(1500)
+                log.info("      Compose bar mode — will use Enter to send")
 
             # ── 5. Find compose box ───────────────────────────────────────
             log.info("      Looking for message compose box...")
 
-            # Take a screenshot for debugging if needed
+            # Screenshot taken AFTER compose activation
             screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams_debug.png")
-            page.screenshot(path=screenshot_path)
+            page.screenshot(path=screenshot_path, full_page=False)
             log.info(f"      Screenshot saved: {screenshot_path}")
 
             selectors = [
