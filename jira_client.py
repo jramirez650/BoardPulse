@@ -12,14 +12,15 @@ def get_auth_header():
 
 
 def get_sprint_tickets():
-    jql = f"sprint in openSprints() AND project = {JIRA_PROJECT}"
-    url = f"{JIRA_URL}/rest/api/3/search"
-    params = {
+    jql = f'sprint in openSprints() AND project = "{JIRA_PROJECT}"'
+    url = f"{JIRA_URL}/rest/api/3/search/jql"
+    payload = {
         "jql": jql,
         "expand": "changelog",
         "maxResults": 50,
+        "fields": ["summary", "status", "assignee", "updated"],
     }
-    response = requests.get(url, headers=get_auth_header(), params=params)
+    response = requests.post(url, headers=get_auth_header(), json=payload)
     response.raise_for_status()
     return response.json()["issues"]
 
