@@ -71,7 +71,17 @@ def send_to_teams(message: str) -> bool:
             page.get_by_text(CHANNEL_NAME, exact=True).first.click()
             page.wait_for_timeout(1500)
 
-            # ── 4. Find compose box ───────────────────────────────────────
+            # ── 4. Click "Post in channel" if compose box not yet visible ──
+            try:
+                post_btn = page.get_by_text("Post in channel", exact=True)
+                if post_btn.is_visible(timeout=3000):
+                    log.info("      Clicking 'Post in channel' button...")
+                    post_btn.click()
+                    page.wait_for_timeout(2000)
+            except Exception:
+                pass  # button not present — compose box already visible
+
+            # ── 5. Find compose box ───────────────────────────────────────
             log.info("      Looking for message compose box...")
 
             # Take a screenshot for debugging if needed
@@ -118,7 +128,7 @@ def send_to_teams(message: str) -> bool:
                         pass
                 raise Exception("Compose box not found — check teams_debug.png")
 
-            # ── 5. Paste message via clipboard ────────────────────────────
+            # ── 6. Paste message via clipboard ────────────────────────────
             log.info("      Pasting message...")
             context.grant_permissions(["clipboard-read", "clipboard-write"])
             page.evaluate(f"navigator.clipboard.writeText({json.dumps(message)})")
@@ -128,7 +138,7 @@ def send_to_teams(message: str) -> bool:
             page.keyboard.press("Control+v")
             page.wait_for_timeout(1000)
 
-            # ── 6. Send ───────────────────────────────────────────────────
+            # ── 7. Send ───────────────────────────────────────────────────
             log.info("      Sending message...")
             page.keyboard.press("Enter")
             page.wait_for_timeout(2000)
