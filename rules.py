@@ -11,7 +11,7 @@ def detect_stale_tickets(issues):
         summary = issue["fields"]["summary"]
         status = issue["fields"]["status"]["name"]
         assignee = issue["fields"].get("assignee") or {}
-        assignee_name = assignee.get("displayName", "Sin asignar")
+        assignee_name = assignee.get("displayName", "Unassigned")
 
         updated_raw = issue["fields"]["updated"].replace("+0000", "+00:00")
         updated = datetime.fromisoformat(updated_raw)
@@ -36,7 +36,7 @@ def detect_po_accepted(issues):
         key = issue["key"]
         summary = issue["fields"]["summary"]
         assignee = issue["fields"].get("assignee") or {}
-        assignee_name = assignee.get("displayName", "Sin asignar")
+        assignee_name = assignee.get("displayName", "Unassigned")
 
         changelog = issue.get("changelog", {}).get("histories", [])
 

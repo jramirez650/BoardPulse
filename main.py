@@ -5,34 +5,34 @@ from teams_notifier import send_to_teams
 
 
 def run():
-    print("🔍 BoardPulse - Escaneando board...")
+    print("🔍 BoardPulse - Scanning board...")
 
     # 1. Fetch sprint tickets
     issues = get_sprint_tickets()
-    print(f"   Encontrados {len(issues)} tickets en el sprint activo")
+    print(f"   Found {len(issues)} tickets in the active sprint")
 
     # 2. Apply detection rules
     stale = detect_stale_tickets(issues)
     po_accepted = detect_po_accepted(issues)
-    print(f"   🚨 Tickets estancados: {len(stale)}")
-    print(f"   ✅ Tickets aceptados por PO: {len(po_accepted)}")
+    print(f"   🚨 Stale tickets: {len(stale)}")
+    print(f"   ✅ PO-accepted tickets: {len(po_accepted)}")
 
     if not stale and not po_accepted:
-        print("   ✨ Todo limpio, nada que reportar!")
+        print("   ✨ All clear, nothing to report!")
         return
 
     # 3. Generate AI alert
-    print("   🤖 Generando resumen con AI...")
+    print("   🤖 Generating AI summary...")
     alert_message = generate_alert(stale, po_accepted)
     print(f"\n{alert_message}\n")
 
     # 4. Send to Teams
-    print("   📤 Enviando a Teams...")
+    print("   📤 Sending to Teams...")
     success = send_to_teams(alert_message)
     if success:
-        print("   ✅ Mensaje enviado exitosamente!")
+        print("   ✅ Message sent successfully!")
     else:
-        print("   ❌ Error enviando a Teams")
+        print("   ❌ Error sending to Teams")
 
 
 if __name__ == "__main__":

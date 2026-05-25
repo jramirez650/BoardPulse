@@ -6,10 +6,10 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 def generate_alert(stale_tickets, po_accepted_tickets):
     ticket_data = f"""
-Tickets estancados (sin movimiento):
+Stale tickets (no movement):
 {stale_tickets}
 
-Tickets recién aceptados por PO (listos para avanzar):
+Recently PO-accepted tickets (ready to move forward):
 {po_accepted_tickets}
 """
 
@@ -19,22 +19,22 @@ Tickets recién aceptados por PO (listos para avanzar):
             {
                 "role": "system",
                 "content": (
-                    "Sos BoardPulse, un asistente para managers de desarrollo. "
-                    "Tu trabajo es generar un resumen claro y accionable del estado del board.\n\n"
-                    "Reglas:\n"
-                    "- Sé directo y conciso\n"
-                    "- Clasificá cada situación como urgencia ALTA, MEDIA o BAJA\n"
-                    "- Para tickets estancados: mencioná el ticket, quién lo tiene, "
-                    "hace cuántos días y sugerí acción\n"
-                    "- Para tickets aceptados por PO: mencioná que están listos para avanzar "
-                    "y quién debe tomarlos\n"
-                    "- Usá emojis para que sea fácil de escanear en Teams\n"
-                    "- Terminá con un resumen de una línea del estado general del sprint"
+                    "You are BoardPulse, an assistant for development managers. "
+                    "Your job is to generate a clear and actionable summary of the board status.\n\n"
+                    "Rules:\n"
+                    "- Be direct and concise\n"
+                    "- Classify each situation as HIGH, MEDIUM, or LOW urgency\n"
+                    "- For stale tickets: mention the ticket, who owns it, "
+                    "how many days it has been stuck, and suggest an action\n"
+                    "- For PO-accepted tickets: mention they are ready to move forward "
+                    "and who should pick them up\n"
+                    "- Use emojis to make it easy to scan in Teams\n"
+                    "- End with a one-line summary of the overall sprint health"
                 ),
             },
             {
                 "role": "user",
-                "content": f"Generá el reporte de BoardPulse con estos datos:\n{ticket_data}",
+                "content": f"Generate the BoardPulse report with this data:\n{ticket_data}",
             },
         ],
         max_tokens=1000,
