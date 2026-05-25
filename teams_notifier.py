@@ -90,6 +90,8 @@ def send_to_teams(message: str) -> bool:
             log.info(f"      Screenshot saved: {screenshot_path}")
 
             selectors = [
+                '[aria-placeholder="Type a message"]',
+                'p[data-placeholder="Type a message"]',
                 '[data-tid="ckeditor"]',
                 '[aria-label="Type a message"]',
                 '[aria-label="New message"]',
@@ -138,9 +140,17 @@ def send_to_teams(message: str) -> bool:
             page.keyboard.press("Control+v")
             page.wait_for_timeout(1000)
 
-            # ── 7. Send ───────────────────────────────────────────────────
-            log.info("      Sending message...")
-            page.keyboard.press("Enter")
+            # ── 7. Send — click "Post" button (Enter adds newline in rich editor)
+            log.info("      Clicking Post button...")
+            try:
+                post_btn = page.get_by_role("button", name="Post")
+                if not post_btn.is_visible(timeout=2000):
+                    raise Exception("Post button not visible")
+                post_btn.click()
+            except Exception:
+                # Fallback: Ctrl+Enter sends in Teams rich editor
+                log.info("      Post button not found, trying Ctrl+Enter...")
+                page.keyboard.press("Control+Enter")
             page.wait_for_timeout(2000)
 
             log.info("      Message posted to Teams successfully!")
