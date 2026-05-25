@@ -10,6 +10,101 @@ CHANNEL_NAME = os.getenv("TEAMS_CHANNEL_NAME", "")
 SESSION_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".teams_session")
 
 
+def _write_clipboard(page, context, text: str):
+    """Write text to clipboard, trying multiple methods."""
+    try:
+        context.grant_permissions(["clipboard-read", "clipboard-write"])
+        page.evaluate(f"navigator.clipboard.writeText({json.dumps(text)})")
+        return
+    except Exception:
+        pass
+    # Fallback: write via execCommand (older API)
+    try:
+        page.evaluate(f"""() => {{
+            const ta = document.createElement('textarea');
+            ta.value = {json.dumps(text)};
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }}""")
+    except Exception as e:
+        log.warning(f"      clipboard write fallback also failed: {e}")
+
+
+def _find_compose_box(page):
+    """Try every known selector to locate the compose box, including Shadow DOM pierce."""
+    selectors = [
+        # Shadow DOM pierce (new Teams uses web components)
+        "pierce/[aria-placeholder='Type a message']",
+        "pierce/div[contenteditable='true']",
+        "pierce/[role='textbox']",
+        "pierce/[contenteditable='true']",
+        # Standard selectors
+        "[aria-placeholder='Type a message']",
+        "p[data-placeholder='Type a message']",
+        "[data-tid='ckeditor']",
+        "[aria-label='Type a message']",
+        "[aria-label='New message']",
+        "div[contenteditable='true'][aria-multiline='true']",
+        "div[contenteditable='true'][role='textbox']",
+        ".ck-editor__editable",
+        "[data-testid='message-texteditor-input']",
+        "div[contenteditable='true']",
+    ]
+    for sel in selectors:
+        try:
+            els = page.locator(sel)
+            count = els.count()
+            if count > 0:
+                el = els.last
+                if el.is_visible(timeout=2000):
+                    log.info(f"      Compose box found ({sel}, {count} match(es))")
+                    return el
+        except Exception:
+            continue
+    return None
+
+
+def _focus_via_js(page) -> bool:
+    """Walk the full Shadow DOM tree and focus the first visible contenteditable."""
+    result = page.evaluate("""() => {
+        function findAndFocus(root) {
+            const candidates = root.querySelectorAll(
+                '[contenteditable="true"], [role="textbox"], [aria-placeholder]'
+            );
+            for (const el of candidates) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 50 && rect.height > 10) {
+                    el.focus();
+                    el.click();
+                    return (
+                        el.tagName + ':' +
+                        (el.getAttribute('aria-placeholder') ||
+                         el.getAttribute('aria-label') ||
+                         el.getAttribute('role') ||
+                         'element')
+                    );
+                }
+            }
+            // Recurse into shadow roots
+            for (const el of root.querySelectorAll('*')) {
+                if (el.shadowRoot) {
+                    const found = findAndFocus(el.shadowRoot);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+        return findAndFocus(document);
+    }""")
+    if result:
+        log.info(f"      JS Shadow DOM focus succeeded: {result}")
+        return True
+    log.warning("      JS Shadow DOM traversal found nothing")
+    return False
+
+
 def send_to_teams(message: str) -> bool:
     with sync_playwright() as p:
         log.info(f"      Launching browser (session saved at: {SESSION_DIR})")
@@ -28,11 +123,8 @@ def send_to_teams(message: str) -> bool:
             # ── 1. Navigate to Teams ──────────────────────────────────────
             log.info("      Navigating to Microsoft Teams...")
             page.goto("https://teams.cloud.microsoft", wait_until="domcontentloaded", timeout=30000)
-
-            # Wait for login/redirect to settle
             page.wait_for_timeout(3000)
 
-            # If redirected to Okta/login, wait up to 3 min for manual login
             def _is_teams_url(url):
                 return "teams.cloud.microsoft" in url or "teams.microsoft.com" in url
 
@@ -43,7 +135,7 @@ def send_to_teams(message: str) -> bool:
                 page.wait_for_url(_is_teams_url, timeout=180000)
                 page.wait_for_timeout(4000)
 
-            # Wait for Teams app to finish loading (try multiple selectors)
+            # ── Wait for Teams to load ────────────────────────────────────
             log.info("      Waiting for Teams to fully load...")
             for selector in [
                 '[data-tid="leftRail"]',
@@ -82,86 +174,102 @@ def send_to_teams(message: str) -> bool:
                     dialog_mode = True
                     log.info("      Dialog mode — will use Post button to send")
             except Exception:
-                # Channel has posts — click bottom of viewport to activate compose bar
                 log.info("      Channel has posts — activating compose bar...")
                 vp = page.viewport_size or {"width": 1280, "height": 720}
                 page.mouse.click(vp["width"] // 2, vp["height"] - 80)
                 page.wait_for_timeout(1500)
                 log.info("      Compose bar mode — will use Enter to send")
 
-            # ── 5. Find compose box ───────────────────────────────────────
-            log.info("      Looking for message compose box...")
+            # ── 5. Focus compose box ──────────────────────────────────────
+            log.info("      Locating compose box...")
 
-            # Screenshot taken AFTER compose activation
+            # First try keyboard shortcut — works even when element is in Shadow DOM
+            log.info("      Trying Teams keyboard shortcut Alt+Shift+C...")
+            page.keyboard.press("Alt+Shift+C")
+            page.wait_for_timeout(1200)
+
+            # Inspect what is currently focused
+            focused_info = page.evaluate("""() => {
+                const el = document.activeElement;
+                if (!el || el === document.body) return 'body/none';
+                return (
+                    el.tagName + ':' +
+                    (el.getAttribute('aria-label') ||
+                     el.getAttribute('aria-placeholder') ||
+                     el.id || 'no-label')
+                );
+            }""")
+            log.info(f"      Active element after shortcut: {focused_info}")
+
+            # Screenshot for debugging
             screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams_debug.png")
             page.screenshot(path=screenshot_path, full_page=False)
             log.info(f"      Screenshot saved: {screenshot_path}")
 
-            selectors = [
-                '[aria-placeholder="Type a message"]',
-                'p[data-placeholder="Type a message"]',
-                '[data-tid="ckeditor"]',
-                '[aria-label="Type a message"]',
-                '[aria-label="New message"]',
-                'div[contenteditable="true"][aria-multiline="true"]',
-                'div[contenteditable="true"][role="textbox"]',
-                '.ck-editor__editable',
-                '[data-testid="message-texteditor-input"]',
-                'div[contenteditable="true"]',
-            ]
+            # Try selector-based search (including pierce/ for Shadow DOM)
+            compose_box = _find_compose_box(page)
 
-            compose_box = None
-            for sel in selectors:
-                try:
-                    els = page.locator(sel)
-                    count = els.count()
-                    if count > 0:
-                        el = els.last
-                        if el.is_visible(timeout=2000):
-                            compose_box = el
-                            log.info(f"      Compose box found ({sel}, {count} match(es))")
-                            break
-                except Exception:
-                    continue
+            # ── 6. Paste message ──────────────────────────────────────────
+            log.info("      Writing message to clipboard...")
+            _write_clipboard(page, context, message)
+            page.wait_for_timeout(400)
 
-            if not compose_box:
-                # Last resort: find all contenteditable elements and log them
-                all_ce = page.locator('[contenteditable]').all()
-                log.error(f"      Compose box not found. Found {len(all_ce)} contenteditable elements.")
-                for i, el in enumerate(all_ce):
-                    try:
-                        log.debug(f"        [{i}] tag={el.evaluate('e => e.tagName')} "
-                                  f"aria={el.get_attribute('aria-label')} "
-                                  f"role={el.get_attribute('role')} "
-                                  f"visible={el.is_visible()}")
-                    except Exception:
-                        pass
-                raise Exception("Compose box not found — check teams_debug.png")
+            if compose_box:
+                log.info("      Clicking compose box and pasting...")
+                compose_box.click()
+                page.wait_for_timeout(500)
+                page.keyboard.press("Control+a")
+                page.keyboard.press("Control+v")
+                page.wait_for_timeout(1000)
 
-            # ── 6. Paste message via clipboard ────────────────────────────
-            log.info("      Pasting message...")
-            context.grant_permissions(["clipboard-read", "clipboard-write"])
-            page.evaluate(f"navigator.clipboard.writeText({json.dumps(message)})")
-            compose_box.click()
-            page.wait_for_timeout(500)
-            page.keyboard.press("Control+a")
-            page.keyboard.press("Control+v")
-            page.wait_for_timeout(1000)
+            elif "body" not in focused_info and focused_info != "body/none":
+                # Alt+Shift+C focused something useful — paste directly
+                log.info("      Compose box in focus (via shortcut) — pasting directly...")
+                page.keyboard.press("Control+a")
+                page.keyboard.press("Control+v")
+                page.wait_for_timeout(1000)
+
+            else:
+                # Last resort: Shadow DOM JS traversal + paste
+                log.info("      Trying JavaScript Shadow DOM traversal...")
+                if _focus_via_js(page):
+                    page.wait_for_timeout(600)
+                    page.keyboard.press("Control+a")
+                    page.keyboard.press("Control+v")
+                    page.wait_for_timeout(1000)
+                else:
+                    # Log all contenteditable elements for diagnosis
+                    all_ce = page.locator("[contenteditable]").all()
+                    log.error(f"      Compose box not found. {len(all_ce)} contenteditable element(s) visible.")
+                    for i, el in enumerate(all_ce):
+                        try:
+                            log.debug(f"        [{i}] tag={el.evaluate('e => e.tagName')} "
+                                      f"aria={el.get_attribute('aria-label')} "
+                                      f"role={el.get_attribute('role')} "
+                                      f"visible={el.is_visible()}")
+                        except Exception:
+                            pass
+                    raise Exception("Compose box not found — check teams_debug.png")
+
+            # Screenshot after paste
+            page.screenshot(
+                path=screenshot_path.replace(".png", "_after_paste.png"),
+                full_page=False,
+            )
+            log.info("      After-paste screenshot saved")
 
             # ── 7. Send ───────────────────────────────────────────────────
             if dialog_mode:
-                # Dialog (empty channel): click the "Post" button
                 log.info("      Clicking Post button...")
                 try:
                     send_btn = page.get_by_role("button", name="Post")
-                    if not send_btn.is_visible(timeout=2000):
+                    if not send_btn.is_visible(timeout=3000):
                         raise Exception("Post button not visible")
                     send_btn.click()
                 except Exception:
                     log.info("      Post button not found, trying Ctrl+Enter...")
                     page.keyboard.press("Control+Enter")
             else:
-                # Compose bar (channel has posts): Enter sends
                 log.info("      Pressing Enter to send...")
                 page.keyboard.press("Enter")
             page.wait_for_timeout(2000)
