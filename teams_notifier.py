@@ -259,48 +259,20 @@ def send_to_teams(message: str) -> bool:
             log.info("      After-paste screenshot saved")
 
             # ── 7. Send ───────────────────────────────────────────────────
-            # Try clicking the Teams send button (arrow icon) first — more
-            # reliable than keyboard because it doesn't depend on focus.
-            send_selectors = [
-                "pierce/[data-tid='send-message-button']",
-                "[data-tid='send-message-button']",
-                "pierce/[aria-label='Send']",
-                "[aria-label='Send']",
-                "pierce/button[aria-label='Send message']",
-                "button[aria-label='Send message']",
-            ]
-            if dialog_mode:
-                send_selectors = ["button[aria-label='Post']", "pierce/button[aria-label='Post']"] + send_selectors
-
-            sent = False
-            for send_sel in send_selectors:
+            # Re-focus compose box to make sure Ctrl+Enter lands in the right place
+            log.info("      Re-focusing compose box before sending...")
+            if compose_box:
                 try:
-                    btn = page.locator(send_sel)
-                    if btn.is_visible(timeout=1500):
-                        btn.click()
-                        sent = True
-                        log.info(f"      Clicked send button ({send_sel})")
-                        break
+                    compose_box.click()
+                    page.wait_for_timeout(300)
                 except Exception:
-                    continue
+                    pass
+            else:
+                page.keyboard.press("Alt+Shift+C")
+                page.wait_for_timeout(500)
 
-            if not sent:
-                # Re-focus compose box, then use keyboard
-                log.info("      Send button not found — re-focusing compose and pressing Enter...")
-                if compose_box:
-                    try:
-                        compose_box.click()
-                        page.wait_for_timeout(300)
-                    except Exception:
-                        pass
-                else:
-                    page.keyboard.press("Alt+Shift+C")
-                    page.wait_for_timeout(500)
-
-                if dialog_mode:
-                    page.keyboard.press("Control+Enter")
-                else:
-                    page.keyboard.press("Enter")
+            log.info("      Sending with Ctrl+Enter...")
+            page.keyboard.press("Control+Enter")
 
             page.wait_for_timeout(2000)
 
