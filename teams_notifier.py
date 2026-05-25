@@ -72,14 +72,17 @@ def send_to_teams(message: str) -> bool:
             page.wait_for_timeout(1500)
 
             # ── 4. Click "Post in channel" if compose box not yet visible ──
+            dialog_mode = False
             try:
                 post_btn = page.get_by_text("Post in channel", exact=True)
                 if post_btn.is_visible(timeout=3000):
-                    log.info("      Clicking 'Post in channel' button...")
+                    log.info("      Clicking 'Post in channel' button (empty channel)...")
                     post_btn.click()
                     page.wait_for_timeout(2000)
+                    dialog_mode = True
+                    log.info("      Dialog mode — will use Post button to send")
             except Exception:
-                pass  # button not present — compose box already visible
+                log.info("      Channel has posts — will use compose bar + Enter to send")
 
             # ── 5. Find compose box ───────────────────────────────────────
             log.info("      Looking for message compose box...")
@@ -140,17 +143,22 @@ def send_to_teams(message: str) -> bool:
             page.keyboard.press("Control+v")
             page.wait_for_timeout(1000)
 
-            # ── 7. Send — click "Post" button (Enter adds newline in rich editor)
-            log.info("      Clicking Post button...")
-            try:
-                post_btn = page.get_by_role("button", name="Post")
-                if not post_btn.is_visible(timeout=2000):
-                    raise Exception("Post button not visible")
-                post_btn.click()
-            except Exception:
-                # Fallback: Ctrl+Enter sends in Teams rich editor
-                log.info("      Post button not found, trying Ctrl+Enter...")
-                page.keyboard.press("Control+Enter")
+            # ── 7. Send ───────────────────────────────────────────────────
+            if dialog_mode:
+                # Dialog (empty channel): click the "Post" button
+                log.info("      Clicking Post button...")
+                try:
+                    send_btn = page.get_by_role("button", name="Post")
+                    if not send_btn.is_visible(timeout=2000):
+                        raise Exception("Post button not visible")
+                    send_btn.click()
+                except Exception:
+                    log.info("      Post button not found, trying Ctrl+Enter...")
+                    page.keyboard.press("Control+Enter")
+            else:
+                # Compose bar (channel has posts): Enter sends
+                log.info("      Pressing Enter to send...")
+                page.keyboard.press("Enter")
             page.wait_for_timeout(2000)
 
             log.info("      Message posted to Teams successfully!")
