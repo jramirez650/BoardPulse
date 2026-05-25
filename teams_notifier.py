@@ -135,62 +135,55 @@ def send_to_teams(message: str) -> bool:
             page.screenshot(path=screenshot_path, full_page=False)
             log.info(f"      Debug screenshot saved: {screenshot_path}")
 
+            # Confirmed selectors from live DOM inspection (in order of preference)
             compose_selectors = [
-                # Most stable: data-tid (language-independent, confirmed in DOM)
-                "[data-tid='ckeditor']",
-                # CKEditor class (confirmed in DOM)
-                ".ck-editor__editable_inline",
-                ".ck-editor__editable",
-                # aria-label in Spanish (confirmed) and English
-                "[aria-label='Escriba un mensaje']",
-                "[aria-label='Type a message']",
+                "[data-tid='ckeditor']",                        # most stable, language-independent
+                "[aria-label='Escriba un mensaje']",            # Spanish UI (confirmed)
+                "[aria-label='Type a message']",                # English UI
                 "[aria-label='New message']",
-                # placeholder variants
-                "[aria-placeholder='Type a message']",
-                "p[data-placeholder='Type a message']",
-                # role/contenteditable combos
-                "div[contenteditable='true'][role='textbox']",
-                "div[contenteditable='true'][aria-multiline='true']",
-                # Shadow DOM pierce variants
-                "pierce/[data-tid='ckeditor']",
-                "pierce/div[contenteditable='true']",
-                "pierce/[role='textbox']",
-                # Last resort
-                "div[contenteditable='true']",
+                "div[contenteditable='true'][role='textbox']",  # generic fallback
+                "div[contenteditable='true']",                  # last resort
             ]
 
-            def _search_frame(frame):
-                """Search for the compose box in a single frame."""
-                for sel in compose_selectors:
-                    try:
-                        els = frame.locator(sel)
-                        count = els.count()
-                        if count > 0:
-                            el = els.last
-                            if el.is_visible(timeout=1500):
-                                return el, sel
-                    except Exception:
-                        continue
-                return None, None
-
-            # Search main frame first, then all child iframes
             compose_box = None
-            compose_frame = page
+            found_sel = None
 
-            log.info(f"      Searching {len(page.frames)} frame(s) for compose box...")
-            for frame in page.frames:
-                url_snippet = frame.url[:80] if frame.url else "(no url)"
-                log.debug(f"        Checking frame: {url_snippet}")
-                box, sel = _search_frame(frame)
-                if box:
-                    compose_box = box
-                    compose_frame = frame
-                    log.info(f"      Compose box found in frame [{url_snippet}] via '{sel}'")
-                    break
+            # Primary: search the main page directly (confirmed in DOM — not inside an iframe)
+            for sel in compose_selectors:
+                try:
+                    els = page.locator(sel)
+                    if els.count() > 0:
+                        el = els.last
+                        if el.is_visible(timeout=2000):
+                            compose_box = el
+                            found_sel = sel
+                            log.info(f"      Compose box found via '{sel}'")
+                            break
+                except Exception:
+                    continue
+
+            # Fallback: check child iframes (rare but possible in some Teams versions)
+            if not compose_box and len(page.frames) > 1:
+                log.info(f"      Not found in main frame — checking {len(page.frames)-1} child frame(s)...")
+                for frame in page.frames[1:]:
+                    url_snippet = frame.url[:80] if frame.url else "(no url)"
+                    for sel in compose_selectors:
+                        try:
+                            els = frame.locator(sel)
+                            if els.count() > 0:
+                                el = els.last
+                                if el.is_visible(timeout=1500):
+                                    compose_box = el
+                                    found_sel = sel
+                                    log.info(f"      Compose box found in frame [{url_snippet}] via '{sel}'")
+                                    break
+                        except Exception:
+                            continue
+                    if compose_box:
+                        break
 
             if not compose_box:
-                # Dump all frame URLs and contenteditable counts for diagnosis
-                log.error("      Compose box not found in any frame.")
+                log.error("      Compose box not found.")
                 for frame in page.frames:
                     try:
                         count = frame.locator("[contenteditable]").count()
@@ -222,13 +215,29 @@ def send_to_teams(message: str) -> bool:
 
             sent = False
 
-            # Try clicking the Post/Send button
-            # Button text is "Publicar" in Spanish Teams UI
-            for search_ctx in [page, compose_frame]:
-                # Try by text first
+            # Confirmed from live DOM: send button is inside [data-tid='post']
+            # <div data-tid="post"><button type="button">Publicar</button></div>
+            send_selectors = [
+                "[data-tid='post'] button",   # confirmed in DOM (primary)
+                "[data-tid='post-button']",
+                "[data-tid='send-message-button']",
+            ]
+            for post_sel in send_selectors:
+                try:
+                    btn = page.locator(post_sel)
+                    if btn.is_visible(timeout=1500):
+                        btn.click()
+                        sent = True
+                        log.info(f"      Clicked send button ({post_sel})")
+                        break
+                except Exception:
+                    continue
+
+            # Fallback: by button role + text
+            if not sent:
                 for btn_text in ["Publicar", "Post", "Send", "Enviar"]:
                     try:
-                        btn = search_ctx.get_by_role("button", name=btn_text, exact=True)
+                        btn = page.get_by_role("button", name=btn_text, exact=True)
                         if btn.is_visible(timeout=1000):
                             btn.click()
                             sent = True
@@ -236,26 +245,8 @@ def send_to_teams(message: str) -> bool:
                             break
                     except Exception:
                         continue
-                if sent:
-                    break
 
-                # Try by selector
-                for post_sel in [
-                    "[data-tid='send-message-button']",
-                    "pierce/[data-tid='send-message-button']",
-                ]:
-                    try:
-                        btn = search_ctx.locator(post_sel)
-                        if btn.is_visible(timeout=1000):
-                            btn.click()
-                            sent = True
-                            log.info(f"      Clicked send button ({post_sel})")
-                            break
-                    except Exception:
-                        continue
-                if sent:
-                    break
-
+            # Last resort: Ctrl+Enter keyboard shortcut
             if not sent:
                 log.info("      Send button not found — re-focusing and using Ctrl+Enter...")
                 compose_box.click()
