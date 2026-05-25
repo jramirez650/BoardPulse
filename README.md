@@ -64,4 +64,4 @@ BoardPulse/
 ## Team
 
 Hackathon Gallo Pinto 2026 — Group #6  
-Andrea Salazar, Jose Ramirez, Alcides Lara, Marco Duran, Leonel Araya, Renato Miranda
+Andrea Salazar, Jose Ramirez, Alcides Lara, Kimberly Hernandez, Renato Miranda
