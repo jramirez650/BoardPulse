@@ -98,7 +98,10 @@ def send_to_teams(message):
     import logging
     log = logging.getLogger("boardpulse")
 
-    token = _get_token()
+    # Allow a pre-fetched token (e.g. from Graph Explorer) to skip MSAL auth
+    static_token = os.getenv("GRAPH_ACCESS_TOKEN", "")
+    token = static_token if static_token else _get_token()
+
     team_id, channel_id = _get_team_and_channel(token)
 
     url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages"
