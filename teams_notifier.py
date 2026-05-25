@@ -27,17 +27,20 @@ def send_to_teams(message: str) -> bool:
         try:
             # ── 1. Navigate to Teams ──────────────────────────────────────
             log.info("      Navigating to Microsoft Teams...")
-            page.goto("https://teams.microsoft.com", wait_until="domcontentloaded", timeout=30000)
+            page.goto("https://teams.cloud.microsoft", wait_until="domcontentloaded", timeout=30000)
 
             # Wait for login/redirect to settle
             page.wait_for_timeout(3000)
 
             # If redirected to Okta/login, wait up to 3 min for manual login
-            if "teams.microsoft.com" not in page.url or "login" in page.url.lower():
+            def _is_teams_url(url):
+                return "teams.cloud.microsoft" in url or "teams.microsoft.com" in url
+
+            if not _is_teams_url(page.url) or "login" in page.url.lower():
                 log.info("      Login page detected — please sign in with your Okta account...")
                 print("\n   🔐 Please log in to Teams in the browser window that just opened.\n"
                       "      Waiting up to 3 minutes...\n")
-                page.wait_for_url("**/teams.microsoft.com/**", timeout=180000)
+                page.wait_for_url(_is_teams_url, timeout=180000)
                 page.wait_for_timeout(4000)
 
             # Wait for Teams app to finish loading (try multiple selectors)
