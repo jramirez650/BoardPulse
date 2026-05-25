@@ -29,11 +29,34 @@ def send_to_teams(message: str) -> bool:
             log.info("      Navigating to Microsoft Teams...")
             page.goto("https://teams.microsoft.com", wait_until="domcontentloaded", timeout=30000)
 
-            # First run: wait for the user to log in manually
-            log.info("      Waiting for Teams to load (log in if prompted)...")
-            page.wait_for_selector('[data-tid="app-bar"], [class*="teams-app"]',
-                                   timeout=120000)
+            # Wait for login/redirect to settle
             page.wait_for_timeout(3000)
+
+            # If redirected to Okta/login, wait up to 3 min for manual login
+            if "teams.microsoft.com" not in page.url or "login" in page.url.lower():
+                log.info("      Login page detected — please sign in with your Okta account...")
+                print("\n   🔐 Please log in to Teams in the browser window that just opened.\n"
+                      "      Waiting up to 3 minutes...\n")
+                page.wait_for_url("**/teams.microsoft.com/**", timeout=180000)
+                page.wait_for_timeout(4000)
+
+            # Wait for Teams app to finish loading (try multiple selectors)
+            log.info("      Waiting for Teams to fully load...")
+            for selector in [
+                '[data-tid="leftRail"]',
+                '[data-tid="app-bar"]',
+                'nav[aria-label]',
+                '[class*="appMount"]',
+                '#app-mount',
+            ]:
+                try:
+                    page.wait_for_selector(selector, timeout=15000)
+                    log.info(f"      Teams loaded ({selector})")
+                    break
+                except Exception:
+                    continue
+
+            page.wait_for_timeout(2000)
 
             # ── 2. Click the team ─────────────────────────────────────────
             log.info(f"      Clicking team: '{TEAM_NAME}'")
