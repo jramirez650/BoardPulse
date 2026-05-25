@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/JoseRamirez/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/797fe4ee-ab3a-4333-992a-a5169c1c8d9d/3be2af22-c2fe-47d2-bfb7-4475052d9a40/skills/docx/**)",
+      "Bash(pandoc --track-changes=all \"C:\\\\Users\\\\JoseRamirez\\\\Downloads\\\\Hackathon Gallo Pinto 3 \\(1\\).docx\" -o output.md)",
+      "Bash(python scripts/office/unpack.py \"C:\\\\Users\\\\JoseRamirez\\\\Downloads\\\\Hackathon Gallo Pinto 3 \\(1\\).docx\" unpacked_proposal/)",
+      "PowerShell(pip install defusedxml -q)",
+      "Bash(python scripts/office/unpack.py \"C:\\\\Users\\\\JoseRamirez\\\\Downloads\\\\Plan de desarrollo code.docx\" unpacked_devplan/)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}
