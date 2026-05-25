@@ -1,5 +1,6 @@
 .env
 .token_cache.json
+.teams_session/
 *.log
 __pycache__/
 *.pyc
