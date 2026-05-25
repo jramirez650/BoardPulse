@@ -90,27 +90,33 @@ def send_to_teams(message: str) -> bool:
             page.wait_for_timeout(2000)
 
             # ── 5. Open compose dialog ────────────────────────────────────
-            # Teams shows a "Publish in channel" button (text varies by language)
-            # that opens a rich-text dialog with a "Post" button.
             log.info("      Opening compose dialog...")
-            publish_btn_texts = [
-                "Publicar en el canal",   # Spanish
-                "Post in channel",        # English
-                "Nueva publicación",
-                "New post",
-            ]
             dialog_opened = False
-            for btn_text in publish_btn_texts:
-                try:
-                    btn = page.get_by_text(btn_text, exact=True)
-                    if btn.is_visible(timeout=3000):
-                        btn.click()
-                        page.wait_for_timeout(2500)
-                        dialog_opened = True
-                        log.info(f"      Opened dialog via '{btn_text}'")
-                        break
-                except Exception:
-                    continue
+
+            # Primary: stable data-tid attribute (language-independent)
+            try:
+                btn = page.locator("[data-tid='compose-start-post']")
+                if btn.is_visible(timeout=4000):
+                    btn.click()
+                    page.wait_for_timeout(3000)
+                    dialog_opened = True
+                    log.info("      Opened dialog via [data-tid='compose-start-post']")
+            except Exception:
+                pass
+
+            # Fallback: button text (varies by Teams UI language)
+            if not dialog_opened:
+                for btn_text in ["Publicar en el canal", "Post in channel", "Nueva publicación", "New post"]:
+                    try:
+                        btn = page.get_by_text(btn_text, exact=True)
+                        if btn.is_visible(timeout=2000):
+                            btn.click()
+                            page.wait_for_timeout(3000)
+                            dialog_opened = True
+                            log.info(f"      Opened dialog via text '{btn_text}'")
+                            break
+                    except Exception:
+                        continue
 
             if not dialog_opened:
                 log.warning("      Compose dialog button not found — trying click at bottom of viewport...")
@@ -130,18 +136,26 @@ def send_to_teams(message: str) -> bool:
             log.info(f"      Debug screenshot saved: {screenshot_path}")
 
             compose_selectors = [
-                "pierce/[aria-placeholder='Type a message']",
-                "pierce/div[contenteditable='true']",
-                "pierce/[role='textbox']",
-                "[aria-placeholder='Type a message']",
-                "p[data-placeholder='Type a message']",
+                # Most stable: data-tid (language-independent, confirmed in DOM)
                 "[data-tid='ckeditor']",
+                # CKEditor class (confirmed in DOM)
+                ".ck-editor__editable_inline",
+                ".ck-editor__editable",
+                # aria-label in Spanish (confirmed) and English
+                "[aria-label='Escriba un mensaje']",
                 "[aria-label='Type a message']",
                 "[aria-label='New message']",
-                "div[contenteditable='true'][aria-multiline='true']",
+                # placeholder variants
+                "[aria-placeholder='Type a message']",
+                "p[data-placeholder='Type a message']",
+                # role/contenteditable combos
                 "div[contenteditable='true'][role='textbox']",
-                ".ck-editor__editable",
-                "[data-testid='message-texteditor-input']",
+                "div[contenteditable='true'][aria-multiline='true']",
+                # Shadow DOM pierce variants
+                "pierce/[data-tid='ckeditor']",
+                "pierce/div[contenteditable='true']",
+                "pierce/[role='textbox']",
+                # Last resort
                 "div[contenteditable='true']",
             ]
 
@@ -208,15 +222,27 @@ def send_to_teams(message: str) -> bool:
 
             sent = False
 
-            # Try the Post/Send button in both the main page and the compose frame
+            # Try clicking the Post/Send button
+            # Button text is "Publicar" in Spanish Teams UI
             for search_ctx in [page, compose_frame]:
+                # Try by text first
+                for btn_text in ["Publicar", "Post", "Send", "Enviar"]:
+                    try:
+                        btn = search_ctx.get_by_role("button", name=btn_text, exact=True)
+                        if btn.is_visible(timeout=1000):
+                            btn.click()
+                            sent = True
+                            log.info(f"      Clicked '{btn_text}' button")
+                            break
+                    except Exception:
+                        continue
+                if sent:
+                    break
+
+                # Try by selector
                 for post_sel in [
                     "[data-tid='send-message-button']",
                     "pierce/[data-tid='send-message-button']",
-                    "button[aria-label='Post']",
-                    "pierce/button[aria-label='Post']",
-                    "[aria-label='Send']",
-                    "pierce/[aria-label='Send']",
                 ]:
                     try:
                         btn = search_ctx.locator(post_sel)
