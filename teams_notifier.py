@@ -73,26 +73,50 @@ def send_to_teams(message: str) -> bool:
 
             # ── 4. Find compose box ───────────────────────────────────────
             log.info("      Looking for message compose box...")
+
+            # Take a screenshot for debugging if needed
+            screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams_debug.png")
+            page.screenshot(path=screenshot_path)
+            log.info(f"      Screenshot saved: {screenshot_path}")
+
             selectors = [
                 '[data-tid="ckeditor"]',
                 '[aria-label="Type a message"]',
+                '[aria-label="New message"]',
+                'div[contenteditable="true"][aria-multiline="true"]',
                 'div[contenteditable="true"][role="textbox"]',
+                '.ck-editor__editable',
+                '[data-testid="message-texteditor-input"]',
                 'div[contenteditable="true"]',
             ]
 
             compose_box = None
             for sel in selectors:
                 try:
-                    el = page.locator(sel).last
-                    if el.is_visible(timeout=2000):
-                        compose_box = el
-                        log.info(f"      Compose box found ({sel})")
-                        break
+                    els = page.locator(sel)
+                    count = els.count()
+                    if count > 0:
+                        el = els.last
+                        if el.is_visible(timeout=2000):
+                            compose_box = el
+                            log.info(f"      Compose box found ({sel}, {count} match(es))")
+                            break
                 except Exception:
                     continue
 
             if not compose_box:
-                raise Exception("Compose box not found — Teams UI may have changed")
+                # Last resort: find all contenteditable elements and log them
+                all_ce = page.locator('[contenteditable]').all()
+                log.error(f"      Compose box not found. Found {len(all_ce)} contenteditable elements.")
+                for i, el in enumerate(all_ce):
+                    try:
+                        log.debug(f"        [{i}] tag={el.evaluate('e => e.tagName')} "
+                                  f"aria={el.get_attribute('aria-label')} "
+                                  f"role={el.get_attribute('role')} "
+                                  f"visible={el.is_visible()}")
+                    except Exception:
+                        pass
+                raise Exception("Compose box not found — check teams_debug.png")
 
             # ── 5. Paste message via clipboard ────────────────────────────
             log.info("      Pasting message...")
