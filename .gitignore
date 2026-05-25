@@ -1,5 +1,6 @@
 .env
 .token_cache.json
+*.log
 __pycache__/
 *.pyc
 *.pyo
