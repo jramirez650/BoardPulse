@@ -3,3 +3,5 @@ openai
 python-dotenv
 msal
 playwright
+pyautogui
+pillow

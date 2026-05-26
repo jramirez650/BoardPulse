@@ -1,7 +1,10 @@
 import os
 import json
 import logging
+import pyautogui
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
+pyautogui.FAILSAFE = False   # don't abort if mouse reaches corner
 
 log = logging.getLogger("boardpulse")
 
@@ -95,12 +98,33 @@ def send_to_teams(message: str) -> bool:
             page.get_by_text(CHANNEL_NAME, exact=True).first.click()
             page.wait_for_timeout(2000)
 
-            # ── 5. Click "Post in channel" button ─────────────────────────
-            # force=True is confirmed to work: in a previous run DOM showed
-            # post-compose-layout appearing immediately after this click.
-            log.info("      Clicking 'Post in channel' button...")
-            page.locator("[data-tid='compose-start-post']").click(force=True)
-            log.info("      Clicked (force=True)")
+            # ── 5. Click "Post in channel" — real OS mouse via pyautogui ─────
+            log.info("      Clicking 'Post in channel' button via pyautogui...")
+
+            btn = page.locator("[data-tid='compose-start-post']")
+            btn.wait_for(state="visible", timeout=10000)
+            box = btn.bounding_box()
+            if not box:
+                raise Exception("Could not get bounding box for 'Post in channel' button")
+
+            # Convert Playwright viewport coords → physical screen coords.
+            # window.screenX/Y = window's top-left corner on the display.
+            # outerHeight - innerHeight = browser chrome (title + tabs + address bar).
+            # devicePixelRatio scales CSS px → physical px.
+            win = page.evaluate("""() => ({
+                x:   window.screenX,
+                y:   window.screenY,
+                dpr: window.devicePixelRatio || 1,
+                chromeH: window.outerHeight - window.innerHeight
+            })""")
+            dpr = win["dpr"]
+            sx = (win["x"] + box["x"] + box["width"]  / 2) * dpr
+            sy = (win["y"] + win["chromeH"] + box["y"] + box["height"] / 2) * dpr
+            log.info(f"      Screen coords: ({sx:.0f}, {sy:.0f})  dpr={dpr}  chrome={win['chromeH']}px")
+
+            pyautogui.moveTo(sx, sy, duration=0.3)
+            pyautogui.click()
+            log.info("      pyautogui click fired")
             page.wait_for_timeout(2000)
 
             # ── 6. Wait for text field and click it ───────────────────────
