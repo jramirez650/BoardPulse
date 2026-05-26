@@ -97,20 +97,27 @@ def send_to_teams(message: str) -> bool:
 
             # ── 5. Click "Post in channel" button (up to 4 retries) ──────────
             log.info("      Clicking 'Post in channel' button...")
+            compose_opened = False
             for attempt in range(1, 5):
+                page.locator("[data-tid='compose-start-post']").click(force=True)
+                log.info(f"      Clicked (attempt {attempt}) — checking if compose opened...")
                 try:
-                    page.locator("[data-tid='compose-start-post']").click(force=True)
-                    log.info(f"      Clicked (attempt {attempt})")
+                    page.locator(_XP_TEXT_FIELD).wait_for(state="visible", timeout=4000)
+                    compose_opened = True
+                    log.info(f"      Compose opened on attempt {attempt}")
                     break
-                except Exception as e:
-                    log.warning(f"      Attempt {attempt} failed: {e}")
+                except Exception:
+                    log.warning(f"      Compose not open yet, retrying ({attempt}/4)...")
                     page.wait_for_timeout(1000)
-            page.wait_for_timeout(2000)
 
-            # ── 6. Wait for text field and click it ───────────────────────
-            log.info("      Waiting for compose text field...")
+            if not compose_opened:
+                raise Exception("Compose did not open after 4 click attempts")
+
+            page.wait_for_timeout(500)
+
+            # ── 6. Click the text field (already confirmed visible above) ───
+            log.info("      Clicking compose text field...")
             text_field = page.locator(_XP_TEXT_FIELD)
-            text_field.wait_for(state="visible", timeout=15000)
             text_field.click()
             log.info("      Compose text field ready")
             page.wait_for_timeout(400)
