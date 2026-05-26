@@ -153,96 +153,79 @@ def send_to_teams(message: str) -> bool:
             page.screenshot(path=screenshot_path.replace(".png", "_2_after_click.png"), full_page=False)
             _dom_state("after-compose-click")
 
-            # ── 6. Find the message compose box ──────────────────────────
-            # Poll via JS (more reliable than wait_for_selector with slow_mo)
-            log.info("      Polling for compose editor (up to 20 s)...")
-
-            compose_box = None
-            found_sel = None
-
-            for attempt in range(10):
+            # ── 6. Wait for compose container, then find editor ───────────
+            # The CKEditor lives inside the Shadow DOM of post-compose-layout.
+            # Regular document.querySelector cannot see it — we need either
+            # evaluate_handle (JS shadow traversal) or coordinate-based click.
+            log.info("      Waiting for compose container (post-compose-layout)...")
+            compose_container_found = False
+            for attempt in range(12):          # up to ~24 s
                 page.wait_for_timeout(2000)
+                count = page.locator("[data-tid='post-compose-layout']").count()
+                log.info(f"      [{attempt+1}/12] post-compose-layout count={count}")
+                if count > 0:
+                    compose_container_found = True
+                    log.info("      Compose container ready.")
+                    break
 
-                check = page.evaluate("""() => {
-                    const ed = document.querySelector('[data-tid="ckeditor"]');
-                    if (ed) {
-                        const r = ed.getBoundingClientRect();
-                        return {found: true, w: r.width, h: r.height, top: r.top,
-                                ce: ed.getAttribute('contenteditable')};
-                    }
-                    const ces = Array.from(document.querySelectorAll('[contenteditable]'))
-                        .map(e => e.tagName + '[' + e.getAttribute('contenteditable') + ']');
-                    const tids = [...new Set(
-                        Array.from(document.querySelectorAll('[data-tid]'))
-                             .map(e => e.getAttribute('data-tid')).filter(Boolean)
-                    )];
-                    return {found: false, ces, tids};
-                }""")
-                log.info(f"      [{attempt+1}/10] JS check: {check}")
-
-                if check.get('found'):
-                    if check.get('w', 0) > 0 and check.get('h', 0) > 0:
-                        # Element visible — use it directly
-                        compose_box = page.locator("[data-tid='ckeditor']").last
-                        found_sel = "[data-tid='ckeditor']"
-                        log.info("      Compose editor is visible — ready to type!")
-                        break
-                    else:
-                        # In DOM but zero-size — scroll it into view and retry once
-                        log.info("      CKEditor found but zero-size — scrolling into view...")
-                        try:
-                            page.locator("[data-tid='ckeditor']").last.scroll_into_view_if_needed()
-                            page.wait_for_timeout(800)
-                        except Exception:
-                            pass
-
-            # Take the main debug screenshot after polling
             page.screenshot(path=screenshot_path, full_page=False)
             log.info(f"      Debug screenshot: {screenshot_path}")
 
-            # Fallback selectors if JS polling didn't find [data-tid='ckeditor']
-            if not compose_box:
-                for sel in [
-                    "[aria-label='Escriba un mensaje']",
-                    "[aria-label='Type a message']",
-                    "div[contenteditable='true'][role='textbox']",
-                    "div[contenteditable='true']",
-                ]:
-                    try:
-                        els = page.locator(sel)
-                        if els.count() > 0 and els.last.is_visible(timeout=1000):
-                            compose_box = els.last
-                            found_sel = sel
-                            log.info(f"      Compose box found via fallback selector '{sel}'")
-                            break
-                    except Exception:
-                        continue
+            if not compose_container_found:
+                raise Exception("post-compose-layout never appeared — compose did not open")
 
-            # Last resort: check child iframes
-            if not compose_box and len(page.frames) > 1:
-                for frame in page.frames[1:]:
-                    for sel in ["[data-tid='ckeditor']", "div[contenteditable='true']"]:
-                        try:
-                            els = frame.locator(sel)
-                            if els.count() > 0 and els.last.is_visible(timeout=1000):
-                                compose_box = els.last
-                                found_sel = f"iframe > {sel}"
-                                log.info(f"      Compose box in iframe via '{sel}'")
-                                break
-                        except Exception:
-                            continue
+            # Extra settle time for CKEditor to initialize inside the shadow root
+            page.wait_for_timeout(2000)
+
+            # ── Shadow-DOM traversal to get an ElementHandle ──────────────
+            _SHADOW_FINDER = """() => {
+                function findInShadow(root) {
+                    const el = root.querySelector('[data-tid="ckeditor"]')
+                             || root.querySelector('[contenteditable="true"][role="textbox"]')
+                             || root.querySelector('[contenteditable="true"]');
+                    if (el) return el;
+                    for (const node of root.querySelectorAll('*')) {
+                        if (node.shadowRoot) {
+                            const found = findInShadow(node.shadowRoot);
+                            if (found) return found;
+                        }
+                    }
+                    return null;
+                }
+                return findInShadow(document);
+            }"""
+
+            compose_handle = page.evaluate_handle(_SHADOW_FINDER)
+            compose_box = compose_handle.as_element()   # ElementHandle or None
+
+            if compose_box:
+                log.info("      CKEditor found via shadow-DOM traversal.")
+            else:
+                # Coordinate fallback: click in the body area of the compose container
+                log.warning("      Shadow-DOM traversal returned nothing — using coordinate click.")
+                container = page.locator("[data-tid='post-compose-layout']")
+                box = container.bounding_box()
+                if box:
+                    cx = box["x"] + box["width"] / 2
+                    cy = box["y"] + box["height"] * 0.65   # below subject line
+                    page.mouse.click(cx, cy)
+                    log.info(f"      Clicked compose area at ({cx:.0f}, {cy:.0f})")
+                    page.wait_for_timeout(600)
+                    # Try shadow traversal one more time after click
+                    compose_handle = page.evaluate_handle(_SHADOW_FINDER)
+                    compose_box = compose_handle.as_element()
                     if compose_box:
-                        break
-
-            if not compose_box:
-                raise Exception("Compose box not found after 20 s — check teams_debug*.png")
+                        log.info("      CKEditor found on second shadow-DOM attempt.")
+                    else:
+                        log.warning("      Proceeding without CKEditor handle (keyboard-only mode).")
 
             # ── 7. Paste message ──────────────────────────────────────────
             log.info("      Pasting message...")
             _write_clipboard(page, context, message)
             page.wait_for_timeout(400)
 
-            compose_box.click()
+            if compose_box:
+                compose_box.click()
             page.wait_for_timeout(400)
             page.keyboard.press("Control+a")
             page.keyboard.press("Control+v")
@@ -257,34 +240,55 @@ def send_to_teams(message: str) -> bool:
 
             # ── 8. Send ───────────────────────────────────────────────────
             log.info("      Sending message...")
-
             sent = False
 
-            # Confirmed from live DOM: send button is inside [data-tid='post']
-            # <div data-tid="post"><button type="button">Publicar</button></div>
-            send_selectors = [
-                "[data-tid='post'] button",   # confirmed in DOM (primary)
-                "[data-tid='post-button']",
-                "[data-tid='send-message-button']",
-            ]
-            for post_sel in send_selectors:
-                try:
-                    btn = page.locator(post_sel)
-                    if btn.is_visible(timeout=1500):
-                        btn.click()
-                        sent = True
-                        log.info(f"      Clicked send button ({post_sel})")
-                        break
-                except Exception:
-                    continue
+            # Try shadow-DOM traversal to find the Post button
+            _POST_BTN_FINDER = """() => {
+                function findInShadow(root) {
+                    const btn = root.querySelector('[data-tid="post"] button')
+                              || root.querySelector('[data-tid="post-button"]')
+                              || root.querySelector('[data-tid="send-message-button"]');
+                    if (btn) return btn;
+                    for (const node of root.querySelectorAll('*')) {
+                        if (node.shadowRoot) {
+                            const found = findInShadow(node.shadowRoot);
+                            if (found) return found;
+                        }
+                    }
+                    return null;
+                }
+                return findInShadow(document);
+            }"""
+            try:
+                post_handle = page.evaluate_handle(_POST_BTN_FINDER)
+                post_btn = post_handle.as_element()
+                if post_btn:
+                    post_btn.click()
+                    sent = True
+                    log.info("      Clicked Post button via shadow-DOM traversal")
+            except Exception as e:
+                log.debug(f"      Shadow-DOM post button search failed: {e}")
 
-            # Fallback: by button role + text
+            # Fallback: Playwright locator (may also pierce shadow DOM)
+            if not sent:
+                for post_sel in ["[data-tid='post'] button", "[data-tid='post-button']"]:
+                    try:
+                        btn = page.locator(post_sel)
+                        if btn.count() > 0:
+                            btn.first.click(force=True)
+                            sent = True
+                            log.info(f"      Clicked send button ({post_sel})")
+                            break
+                    except Exception:
+                        continue
+
+            # Fallback: button by visible text
             if not sent:
                 for btn_text in ["Publicar", "Post", "Send", "Enviar"]:
                     try:
                         btn = page.get_by_role("button", name=btn_text, exact=True)
-                        if btn.is_visible(timeout=1000):
-                            btn.click()
+                        if btn.count() > 0:
+                            btn.first.click(force=True)
                             sent = True
                             log.info(f"      Clicked '{btn_text}' button")
                             break
@@ -293,9 +297,10 @@ def send_to_teams(message: str) -> bool:
 
             # Last resort: Ctrl+Enter keyboard shortcut
             if not sent:
-                log.info("      Send button not found — re-focusing and using Ctrl+Enter...")
-                compose_box.click()
-                page.wait_for_timeout(300)
+                log.info("      Send button not found — using Ctrl+Enter...")
+                if compose_box:
+                    compose_box.click()
+                    page.wait_for_timeout(300)
                 page.keyboard.press("Control+Enter")
 
             page.wait_for_timeout(2500)
