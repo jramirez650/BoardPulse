@@ -97,10 +97,51 @@ def send_to_teams(message: str) -> bool:
 
             # ── 5. Click "Post in channel" button ─────────────────────────
             log.info("      Clicking 'Post in channel' button...")
-            post_in_channel = page.locator(_XP_POST_IN_CHANNEL)
-            post_in_channel.wait_for(state="visible", timeout=10000)
-            post_in_channel.click()
-            log.info("      Clicked 'Post in channel'")
+
+            clicked = False
+
+            # Primary: data-tid attribute (stable, confirmed in light DOM)
+            for attempt in range(3):
+                try:
+                    btn = page.locator("[data-tid='compose-start-post']")
+                    btn.wait_for(state="visible", timeout=5000)
+                    btn.scroll_into_view_if_needed()
+                    page.wait_for_timeout(300)
+                    btn.click()
+                    clicked = True
+                    log.info(f"      Clicked via [data-tid='compose-start-post'] (attempt {attempt+1})")
+                    break
+                except Exception as e:
+                    log.debug(f"      data-tid attempt {attempt+1} failed: {e}")
+                    page.wait_for_timeout(1000)
+
+            # Fallback 1: absolute XPath
+            if not clicked:
+                try:
+                    btn = page.locator(_XP_POST_IN_CHANNEL)
+                    btn.wait_for(state="attached", timeout=5000)
+                    btn.click(force=True)
+                    clicked = True
+                    log.info("      Clicked via XPath (fallback)")
+                except Exception as e:
+                    log.debug(f"      XPath fallback failed: {e}")
+
+            # Fallback 2: button text
+            if not clicked:
+                for label in ["Publicar en el canal", "Post in channel", "Nueva publicación", "New post"]:
+                    try:
+                        btn = page.get_by_text(label, exact=True)
+                        if btn.count() > 0:
+                            btn.first.click(force=True)
+                            clicked = True
+                            log.info(f"      Clicked via text '{label}'")
+                            break
+                    except Exception:
+                        continue
+
+            if not clicked:
+                raise Exception("Could not click 'Post in channel' button")
+
             page.wait_for_timeout(2000)
 
             # ── 6. Wait for text field and click it ───────────────────────
