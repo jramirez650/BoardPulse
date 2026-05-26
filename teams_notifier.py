@@ -96,48 +96,11 @@ def send_to_teams(message: str) -> bool:
             page.wait_for_timeout(2000)
 
             # ── 5. Click "Post in channel" button ─────────────────────────
+            # force=True is confirmed to work: in a previous run DOM showed
+            # post-compose-layout appearing immediately after this click.
             log.info("      Clicking 'Post in channel' button...")
-
-            # Locate the button — try data-tid first, fall back to absolute XPath
-            compose_btn = None
-            for locator_str in [
-                "xpath=//button[@data-tid='compose-start-post']",   # button with data-tid
-                "xpath=//*[@data-tid='compose-start-post']",        # any element with data-tid
-                _XP_POST_IN_CHANNEL,                                # absolute XPath from DOM
-            ]:
-                try:
-                    loc = page.locator(locator_str)
-                    loc.wait_for(state="attached", timeout=5000)
-                    compose_btn = loc
-                    log.info(f"      Found compose button via: {locator_str}")
-                    break
-                except Exception:
-                    continue
-
-            if compose_btn is None:
-                raise Exception("Could not locate 'Post in channel' button")
-
-            compose_btn.scroll_into_view_if_needed()
-            page.wait_for_timeout(500)
-
-            # Get the button's screen coordinates and simulate a real physical mouse click.
-            # Teams listens to pointerdown/mousedown events, not just 'click', so we must
-            # drive the raw mouse rather than using Playwright's synthetic click.
-            box = compose_btn.bounding_box()
-            if box is None:
-                raise Exception("Could not get bounding box for 'Post in channel' button")
-
-            cx = box["x"] + box["width"] / 2
-            cy = box["y"] + box["height"] / 2
-            log.info(f"      Button bounding box: {box}  →  clicking at ({cx:.0f}, {cy:.0f})")
-
-            page.mouse.move(cx, cy)
-            page.wait_for_timeout(200)
-            page.mouse.down()
-            page.wait_for_timeout(100)
-            page.mouse.up()
-            log.info("      Raw mouse click fired (move → down → up)")
-
+            page.locator("[data-tid='compose-start-post']").click(force=True)
+            log.info("      Clicked (force=True)")
             page.wait_for_timeout(2000)
 
             # ── 6. Wait for text field and click it ───────────────────────
