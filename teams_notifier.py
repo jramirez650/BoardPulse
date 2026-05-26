@@ -95,10 +95,16 @@ def send_to_teams(message: str) -> bool:
             page.get_by_text(CHANNEL_NAME, exact=True).first.click()
             page.wait_for_timeout(2000)
 
-            # ── 5. Click "Post in channel" button ─────────────────────────
+            # ── 5. Click "Post in channel" button (up to 4 retries) ──────────
             log.info("      Clicking 'Post in channel' button...")
-            page.locator("[data-tid='compose-start-post']").click(force=True)
-            log.info("      Clicked")
+            for attempt in range(1, 5):
+                try:
+                    page.locator("[data-tid='compose-start-post']").click(force=True)
+                    log.info(f"      Clicked (attempt {attempt})")
+                    break
+                except Exception as e:
+                    log.warning(f"      Attempt {attempt} failed: {e}")
+                    page.wait_for_timeout(1000)
             page.wait_for_timeout(2000)
 
             # ── 6. Wait for text field and click it ───────────────────────
