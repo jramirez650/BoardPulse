@@ -91,30 +91,53 @@ def send_to_teams(message: str) -> bool:
 
             # ── 5. Open compose dialog ────────────────────────────────────
             log.info("      Opening compose dialog...")
-            dialog_opened = False
 
-            # Primary: stable data-tid attribute (language-independent)
+            # Ensure the browser tab is focused
+            page.bring_to_front()
+            page.wait_for_timeout(500)
+
+            screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams_debug.png")
+
+            def _dom_state(label: str):
+                """Log relevant DOM state for diagnostics."""
+                try:
+                    s = page.evaluate("""() => {
+                        const tids = [...new Set(
+                            Array.from(document.querySelectorAll('[data-tid]'))
+                                 .map(e => e.getAttribute('data-tid')).filter(Boolean)
+                        )];
+                        const ces = document.querySelectorAll('[contenteditable]').length;
+                        return {ces, tids};
+                    }""")
+                    log.debug(f"      DOM [{label}]: CE={s['ces']}  tids={s['tids']}")
+                except Exception:
+                    pass
+
+            _dom_state("before-compose-click")
+            page.screenshot(path=screenshot_path.replace(".png", "_1_before.png"), full_page=False)
+
+            # Primary: click compose-start-post (language-independent data-tid)
+            dialog_opened = False
             try:
                 btn = page.locator("[data-tid='compose-start-post']")
                 count = btn.count()
-                log.info(f"      Found {count} [data-tid='compose-start-post'] element(s)")
-                visible_btn = btn.first
-                if visible_btn.is_visible(timeout=4000):
-                    visible_btn.scroll_into_view_if_needed()
-                    visible_btn.click()
+                log.info(f"      Found {count} compose-start-post button(s)")
+                if count > 0:
+                    # Force-click bypasses any transparency/overlay that would block a normal click
+                    btn.first.scroll_into_view_if_needed()
+                    btn.first.click(force=True)
                     dialog_opened = True
-                    log.info("      Clicked [data-tid='compose-start-post']")
+                    log.info("      Clicked [data-tid='compose-start-post'] (force=True)")
             except Exception as e:
                 log.debug(f"      compose-start-post click failed: {e}")
 
-            # Fallback: button text (varies by Teams UI language)
+            # Fallback: button text variants
             if not dialog_opened:
                 for btn_text in ["Publicar en el canal", "Post in channel", "Nueva publicación", "New post"]:
                     try:
                         btn = page.get_by_text(btn_text, exact=True)
                         if btn.is_visible(timeout=2000):
-                            btn.click()
-                            page.wait_for_timeout(3000)
+                            btn.click(force=True)
                             dialog_opened = True
                             log.info(f"      Opened dialog via text '{btn_text}'")
                             break
@@ -122,85 +145,97 @@ def send_to_teams(message: str) -> bool:
                         continue
 
             if not dialog_opened:
-                log.warning("      Compose dialog button not found — trying click at bottom of viewport...")
+                log.warning("      Compose button not found — clicking bottom-center of viewport...")
                 vp = page.viewport_size or {"width": 1280, "height": 720}
-                page.mouse.click(vp["width"] // 2, vp["height"] - 80)
-                page.wait_for_timeout(1500)
+                page.mouse.click(vp["width"] // 2, vp["height"] - 100)
 
-            # Wait for CKEditor to actually appear in the DOM (up to 15s)
-            # CKEditor initializes asynchronously after the compose panel opens
-            log.info("      Waiting for compose editor to initialize...")
-            try:
-                page.wait_for_selector("[data-tid='ckeditor']", state="visible", timeout=15000)
-                log.info("      Compose editor ready.")
-            except Exception:
-                log.warning("      [data-tid='ckeditor'] not visible after 15s, will try fallback selectors...")
-                page.wait_for_timeout(2000)
+            page.wait_for_timeout(1000)
+            page.screenshot(path=screenshot_path.replace(".png", "_2_after_click.png"), full_page=False)
+            _dom_state("after-compose-click")
 
             # ── 6. Find the message compose box ──────────────────────────
-            log.info("      Looking for message compose box...")
-
-            # Screenshot for debugging
-            screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams_debug.png")
-            page.screenshot(path=screenshot_path, full_page=False)
-            log.info(f"      Debug screenshot saved: {screenshot_path}")
-
-            # Confirmed selectors from live DOM inspection (in order of preference)
-            compose_selectors = [
-                "[data-tid='ckeditor']",                        # most stable, language-independent
-                "[aria-label='Escriba un mensaje']",            # Spanish UI (confirmed)
-                "[aria-label='Type a message']",                # English UI
-                "[aria-label='New message']",
-                "div[contenteditable='true'][role='textbox']",  # generic fallback
-                "div[contenteditable='true']",                  # last resort
-            ]
+            # Poll via JS (more reliable than wait_for_selector with slow_mo)
+            log.info("      Polling for compose editor (up to 20 s)...")
 
             compose_box = None
             found_sel = None
 
-            # Primary: search the main page directly (confirmed in DOM — not inside an iframe)
-            for sel in compose_selectors:
-                try:
-                    els = page.locator(sel)
-                    if els.count() > 0:
-                        el = els.last
-                        if el.is_visible(timeout=2000):
-                            compose_box = el
-                            found_sel = sel
-                            log.info(f"      Compose box found via '{sel}'")
-                            break
-                except Exception:
-                    continue
+            for attempt in range(10):
+                page.wait_for_timeout(2000)
 
-            # Fallback: check child iframes (rare but possible in some Teams versions)
+                check = page.evaluate("""() => {
+                    const ed = document.querySelector('[data-tid="ckeditor"]');
+                    if (ed) {
+                        const r = ed.getBoundingClientRect();
+                        return {found: true, w: r.width, h: r.height, top: r.top,
+                                ce: ed.getAttribute('contenteditable')};
+                    }
+                    const ces = Array.from(document.querySelectorAll('[contenteditable]'))
+                        .map(e => e.tagName + '[' + e.getAttribute('contenteditable') + ']');
+                    const tids = [...new Set(
+                        Array.from(document.querySelectorAll('[data-tid]'))
+                             .map(e => e.getAttribute('data-tid')).filter(Boolean)
+                    )];
+                    return {found: false, ces, tids};
+                }""")
+                log.info(f"      [{attempt+1}/10] JS check: {check}")
+
+                if check.get('found'):
+                    if check.get('w', 0) > 0 and check.get('h', 0) > 0:
+                        # Element visible — use it directly
+                        compose_box = page.locator("[data-tid='ckeditor']").last
+                        found_sel = "[data-tid='ckeditor']"
+                        log.info("      Compose editor is visible — ready to type!")
+                        break
+                    else:
+                        # In DOM but zero-size — scroll it into view and retry once
+                        log.info("      CKEditor found but zero-size — scrolling into view...")
+                        try:
+                            page.locator("[data-tid='ckeditor']").last.scroll_into_view_if_needed()
+                            page.wait_for_timeout(800)
+                        except Exception:
+                            pass
+
+            # Take the main debug screenshot after polling
+            page.screenshot(path=screenshot_path, full_page=False)
+            log.info(f"      Debug screenshot: {screenshot_path}")
+
+            # Fallback selectors if JS polling didn't find [data-tid='ckeditor']
+            if not compose_box:
+                for sel in [
+                    "[aria-label='Escriba un mensaje']",
+                    "[aria-label='Type a message']",
+                    "div[contenteditable='true'][role='textbox']",
+                    "div[contenteditable='true']",
+                ]:
+                    try:
+                        els = page.locator(sel)
+                        if els.count() > 0 and els.last.is_visible(timeout=1000):
+                            compose_box = els.last
+                            found_sel = sel
+                            log.info(f"      Compose box found via fallback selector '{sel}'")
+                            break
+                    except Exception:
+                        continue
+
+            # Last resort: check child iframes
             if not compose_box and len(page.frames) > 1:
-                log.info(f"      Not found in main frame — checking {len(page.frames)-1} child frame(s)...")
                 for frame in page.frames[1:]:
-                    url_snippet = frame.url[:80] if frame.url else "(no url)"
-                    for sel in compose_selectors:
+                    for sel in ["[data-tid='ckeditor']", "div[contenteditable='true']"]:
                         try:
                             els = frame.locator(sel)
-                            if els.count() > 0:
-                                el = els.last
-                                if el.is_visible(timeout=1500):
-                                    compose_box = el
-                                    found_sel = sel
-                                    log.info(f"      Compose box found in frame [{url_snippet}] via '{sel}'")
-                                    break
+                            if els.count() > 0 and els.last.is_visible(timeout=1000):
+                                compose_box = els.last
+                                found_sel = f"iframe > {sel}"
+                                log.info(f"      Compose box in iframe via '{sel}'")
+                                break
                         except Exception:
                             continue
                     if compose_box:
                         break
 
             if not compose_box:
-                log.error("      Compose box not found.")
-                for frame in page.frames:
-                    try:
-                        count = frame.locator("[contenteditable]").count()
-                        log.debug(f"        frame={frame.url[:60]}  contenteditable={count}")
-                    except Exception:
-                        pass
-                raise Exception("Compose box not found — check teams_debug.png")
+                raise Exception("Compose box not found after 20 s — check teams_debug*.png")
 
             # ── 7. Paste message ──────────────────────────────────────────
             log.info("      Pasting message...")
