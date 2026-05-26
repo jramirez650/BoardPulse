@@ -117,50 +117,26 @@ def send_to_teams(message: str) -> bool:
             if compose_btn is None:
                 raise Exception("Could not locate 'Post in channel' button")
 
-            # Try progressively more forceful click methods
-            clicked = False
             compose_btn.scroll_into_view_if_needed()
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(500)
 
-            # Method 1: hover then normal click
-            try:
-                compose_btn.hover()
-                page.wait_for_timeout(300)
-                compose_btn.click(timeout=3000)
-                clicked = True
-                log.info("      Clicked via hover+click")
-            except Exception as e:
-                log.debug(f"      hover+click failed: {e}")
+            # Get the button's screen coordinates and simulate a real physical mouse click.
+            # Teams listens to pointerdown/mousedown events, not just 'click', so we must
+            # drive the raw mouse rather than using Playwright's synthetic click.
+            box = compose_btn.bounding_box()
+            if box is None:
+                raise Exception("Could not get bounding box for 'Post in channel' button")
 
-            # Method 2: force click (bypasses visibility/overlap checks)
-            if not clicked:
-                try:
-                    compose_btn.click(force=True)
-                    clicked = True
-                    log.info("      Clicked via force=True")
-                except Exception as e:
-                    log.debug(f"      force click failed: {e}")
+            cx = box["x"] + box["width"] / 2
+            cy = box["y"] + box["height"] / 2
+            log.info(f"      Button bounding box: {box}  →  clicking at ({cx:.0f}, {cy:.0f})")
 
-            # Method 3: dispatch_event — fires raw JS click, bypasses all Playwright checks
-            if not clicked:
-                try:
-                    compose_btn.dispatch_event("click")
-                    clicked = True
-                    log.info("      Clicked via dispatch_event")
-                except Exception as e:
-                    log.debug(f"      dispatch_event failed: {e}")
-
-            # Method 4: evaluate JS .click() directly on the DOM node
-            if not clicked:
-                try:
-                    page.evaluate("document.querySelector('[data-tid=\"compose-start-post\"]').click()")
-                    clicked = True
-                    log.info("      Clicked via JS .click()")
-                except Exception as e:
-                    log.debug(f"      JS .click() failed: {e}")
-
-            if not clicked:
-                raise Exception("All click methods failed for 'Post in channel' button")
+            page.mouse.move(cx, cy)
+            page.wait_for_timeout(200)
+            page.mouse.down()
+            page.wait_for_timeout(100)
+            page.mouse.up()
+            log.info("      Raw mouse click fired (move → down → up)")
 
             page.wait_for_timeout(2000)
 
