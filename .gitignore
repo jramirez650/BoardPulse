@@ -1,5 +1,4 @@
 .env
-.teams_channel_url
 .token_cache.json
 .teams_session/
 *.log

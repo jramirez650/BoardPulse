@@ -9,9 +9,6 @@ TEAM_NAME    = os.getenv("TEAMS_TEAM_NAME", "")
 CHANNEL_NAME = os.getenv("TEAMS_CHANNEL_NAME", "")
 SESSION_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".teams_session")
 
-# Saved channel URL — set once, reused on every run to skip Teams loading time
-_CHANNEL_URL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".teams_channel_url")
-
 # Confirmed XPaths from live DOM inspection
 _XP_POST_IN_CHANNEL = "xpath=/html/body/div[1]/div/div/div/div[9]/div/div[1]/div/div[3]/div/div/button"
 _XP_TEXT_FIELD      = "xpath=/html/body/div[1]/div/div/div/div[9]/div/div[1]/div/div[3]/div/div/div/div/div[1]/div/div/div[4]/div[1]"
@@ -41,12 +38,12 @@ def _write_clipboard(page, context, text: str):
 
 def send_to_teams(message: str) -> bool:
     with sync_playwright() as p:
-        log.info(f"      Launching browser (session: {SESSION_DIR})")
+        log.info(f"      Launching browser (session saved at: {SESSION_DIR})")
 
         context = p.chromium.launch_persistent_context(
             user_data_dir=SESSION_DIR,
             headless=False,
-            slow_mo=0,                  # removed — saves ~10 s per run
+            slow_mo=200,
             args=["--start-maximized"],
             no_viewport=True,
         )
@@ -54,63 +51,51 @@ def send_to_teams(message: str) -> bool:
         page = context.pages[0] if context.pages else context.new_page()
 
         try:
+            # ── 1. Navigate to Teams ──────────────────────────────────────
+            log.info("      Navigating to Microsoft Teams...")
+            page.goto("https://teams.cloud.microsoft", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
+
             def _is_teams_url(url):
                 return "teams.cloud.microsoft" in url or "teams.microsoft.com" in url
 
-            # ── 1. Navigate ───────────────────────────────────────────────
-            # Fast path: go straight to the saved channel URL (skips ~60 s of
-            # Teams loading + team/channel clicking on every subsequent run).
-            saved_url = None
-            if os.path.exists(_CHANNEL_URL_FILE):
-                saved_url = open(_CHANNEL_URL_FILE).read().strip()
-
-            if saved_url:
-                log.info(f"      Navigating directly to channel URL...")
-                page.goto(saved_url, wait_until="domcontentloaded", timeout=30000)
-            else:
-                log.info("      No saved channel URL — doing full navigation...")
-                page.goto("https://teams.cloud.microsoft", wait_until="domcontentloaded", timeout=30000)
-
-            page.wait_for_timeout(2000)
-
-            # Handle login if needed
             if not _is_teams_url(page.url) or "login" in page.url.lower():
-                log.info("      Login required — please sign in...")
-                print("\n   🔐 Please log in to Teams in the browser window.\n"
+                log.info("      Login page detected — please sign in with your Okta account...")
+                print("\n   🔐 Please log in to Teams in the browser window that just opened.\n"
                       "      Waiting up to 3 minutes...\n")
                 page.wait_for_url(_is_teams_url, timeout=180000)
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(4000)
 
-            # ── 2. Wait for Teams to be ready ─────────────────────────────
-            log.info("      Waiting for Teams to load...")
-            for selector in ['[data-tid="leftRail"]', '[data-tid="app-bar"]',
-                             'nav[aria-label]', '#app-mount']:
+            # ── 2. Wait for Teams to load ─────────────────────────────────
+            log.info("      Waiting for Teams to fully load...")
+            for selector in [
+                '[data-tid="leftRail"]',
+                '[data-tid="app-bar"]',
+                'nav[aria-label]',
+                '[class*="appMount"]',
+                '#app-mount',
+            ]:
                 try:
-                    page.wait_for_selector(selector, timeout=60000)
-                    log.info(f"      Teams ready ({selector})")
+                    page.wait_for_selector(selector, timeout=15000)
+                    log.info(f"      Teams loaded ({selector})")
                     break
                 except Exception:
                     continue
 
+            page.wait_for_timeout(2000)
             page.bring_to_front()
 
-            # ── 3. Navigate to team + channel (only if no saved URL) ──────
-            if not saved_url:
-                log.info(f"      Clicking team: '{TEAM_NAME}'")
-                page.get_by_text(TEAM_NAME, exact=True).first.click()
-                page.wait_for_timeout(1000)
+            # ── 3. Click the team ─────────────────────────────────────────
+            log.info(f"      Clicking team: '{TEAM_NAME}'")
+            page.get_by_text(TEAM_NAME, exact=True).first.click()
+            page.wait_for_timeout(1500)
 
-                log.info(f"      Clicking channel: '{CHANNEL_NAME}'")
-                page.get_by_text(CHANNEL_NAME, exact=True).first.click()
-                page.wait_for_timeout(1500)
+            # ── 4. Click the channel ──────────────────────────────────────
+            log.info(f"      Clicking channel: '{CHANNEL_NAME}'")
+            page.get_by_text(CHANNEL_NAME, exact=True).first.click()
+            page.wait_for_timeout(2000)
 
-                # Save the channel URL for future fast-path runs
-                channel_url = page.url
-                if _is_teams_url(channel_url) and "login" not in channel_url:
-                    open(_CHANNEL_URL_FILE, "w").write(channel_url)
-                    log.info(f"      Channel URL saved for next run: {channel_url}")
-
-            # ── 4. Click "Post in channel" (up to 4 retries) ─────────────
+            # ── 5. Click "Post in channel" button (up to 4 retries) ──────────
             log.info("      Clicking 'Post in channel' button...")
             compose_opened = False
             for attempt in range(1, 5):
@@ -123,29 +108,41 @@ def send_to_teams(message: str) -> bool:
                     break
                 except Exception:
                     log.warning(f"      Compose not open yet, retrying ({attempt}/4)...")
-                    page.wait_for_timeout(800)
+                    page.wait_for_timeout(1000)
 
             if not compose_opened:
                 raise Exception("Compose did not open after 4 click attempts")
 
-            # ── 5. Click text field & paste ───────────────────────────────
-            log.info("      Pasting message...")
-            page.locator(_XP_TEXT_FIELD).click()
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(500)
 
+            # ── 6. Click the text field (already confirmed visible above) ───
+            log.info("      Clicking compose text field...")
+            text_field = page.locator(_XP_TEXT_FIELD)
+            text_field.click()
+            log.info("      Compose text field ready")
+            page.wait_for_timeout(400)
+
+            # ── 7. Paste message ──────────────────────────────────────────
+            log.info("      Pasting message...")
             _write_clipboard(page, context, message)
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(400)
             page.keyboard.press("Control+a")
             page.keyboard.press("Control+v")
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1000)
 
-            # ── 6. Click Post ─────────────────────────────────────────────
+            # Debug screenshot after paste
+            screenshot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "teams_debug.png")
+            page.screenshot(path=screenshot_path, full_page=False)
+            log.info(f"      After-paste screenshot: {screenshot_path}")
+
+            # ── 8. Click the Post button ──────────────────────────────────
             log.info("      Clicking Post button...")
             post_btn = page.locator(_XP_POST_BUTTON)
             post_btn.wait_for(state="visible", timeout=10000)
             post_btn.click()
+            log.info("      Post button clicked")
 
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(2500)
             log.info("      Message posted to Teams successfully!")
             return True
 
@@ -156,5 +153,5 @@ def send_to_teams(message: str) -> bool:
             log.error(f"      Error: {e}")
             return False
         finally:
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
             context.close()
